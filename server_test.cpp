@@ -50,7 +50,7 @@ char *trim(char **c)
   }
   //std::cerr << "size is " << strlen(*c) << std::endl;;
 
-  char *p = (char *)malloc(strlen(*c));
+  char *p = (char *)malloc(strlen(*c));//leaky object: after escape, should be freed
   char *ptr = p;
   while( **c != '\0' )
   {
@@ -68,6 +68,11 @@ char *trim(char **c)
   return p;
 }
 
+void leak()
+{
+  malloc(1024*1024);
+}
+
 void log_write(const char *prefix, const char *suffix,  const char *msg)
 {
   time_t tm = time(NULL);
@@ -80,6 +85,7 @@ void log_write(const char *prefix, const char *suffix,  const char *msg)
   fflush(fp_log);
 
   //free(p); // leak point !
+  free(p);
   return;
 }
 
@@ -147,19 +153,341 @@ int server_socket_init(s_info *info)
 #define SYNC1 "send done."
 #define SYNC2 "next come."
 #define SYNC3 "timeout."
-#define MSG1 ":q"
-#define MSG2 ":leak"
-int user_no = 1;
+#define CMD1_1 ":q"
+#define CMD1_0 ":quit"
+#define CMD2 ":leak"
+#define CMD3_1 ":e "
+#define CMD3_0 ":echo "
+#define CMD4 ":mangle "
+#define CMD5 ":demangle "
 
+bool isLoging( char *recv_buf )
+{
+  if( strncmp(recv_buf, "\n", strlen("\n")) == 0 ){ return false; }
+  //no user msg
+  if( strncmp(recv_buf, SYNC3, strlen(SYNC3)) == 0 ){ return false; }
+  //timeout (automatic sent MSG from client program)
+
+  return true;
+}
+
+bool isCommand( char *recv_buf )
+{
+  return (recv_buf[0] == ':');
+}
+
+bool isQuit( char *recv_buf )
+{
+  return (
+    strncmp(recv_buf, CMD1_0, strlen(CMD1_0)) == 0
+    || strncmp(recv_buf, CMD1_1, strlen(CMD1_1)) == 0);
+}
+
+bool isLeak( char *recv_buf )
+{
+  return (strncmp(recv_buf, CMD2, strlen(CMD2)) == 0);
+}
+
+bool isEcho( char *recv_buf )
+{
+  return (
+    strncmp(recv_buf, CMD3_0, strlen(CMD3_0)) == 0
+    || strncmp(recv_buf, CMD3_1, strlen(CMD3_1)) == 0);
+}
+
+void error_log( char *cl, const char *err_msg )
+{
+  log_write("", cl, err_msg);
+  return;
+}
+
+#define OPT_FLAG_LA 0x01
+#define OPT_FLAG_SA 0x02
+#define OPT_FLAG_UB 0x04
+#define OPT_FLAG_SP 0x08
+int log_echo( char *ptr, unsigned char option_flag, char *cl )
+{
+  unsigned long buf_size = strlen(ptr) + 1;
+  char *buf = (char *)calloc(sizeof(char), buf_size);// if option -b or -B -> error handling -> leak
+
+  unsigned int index = 0;
+  while( *ptr != '\0' )
+  {
+    if( (option_flag & OPT_FLAG_LA) > 0 && 'a' <= *ptr && *ptr <= 'z' )
+    {
+      buf[index++] = (*ptr) - 0x20;
+    }
+    else if( (option_flag & OPT_FLAG_SA) > 0 && 'A' <= *ptr && *ptr <= 'Z' )
+    {
+      buf[index++] = (*ptr) + 0x20;
+    }
+    else
+    {
+      buf[index++] = *ptr;
+    }
+    if( buf_size <= index )
+    {
+      error_log(cl, "ERROR: mode echo: buffer over.\n");
+      return -1;
+    }
+    /*--------------------------------------------------------------*/
+    if( (option_flag & OPT_FLAG_UB) > 0 && *(ptr+1) != '\0' )
+    {
+      buf[index++] = '_';
+    }
+    else if( (option_flag & OPT_FLAG_SP) > 0 && *(ptr+1) != '\0' )
+    {
+      buf[index++] = ' ';
+    }
+
+    if( buf_size <= index )
+    {
+      error_log(cl, "ERROR: mode echo: buffer over.\n");
+      return -1;//leak!
+    }
+
+    ptr++;
+  }
+
+  log_write("", cl, buf);
+  free(buf);
+  return 0;
+}
+
+int parse_option_echo_mode( char *recv_buf, char *cl )
+{
+  char *ptr = recv_buf;
+  while( *ptr != ' ' ){ ptr++; }// slide pointer until reach space (:echo_<- here)
+  // *ptr == ' '
+  while( *ptr == ' ' ){ ptr++; }// slide pointer until reach option or string or end of buffer
+  // *ptr != ' '
+
+  unsigned char option_flag = 0;
+  if( *ptr == '-' )
+  {//option matching
+    unsigned int i = 1;
+    while( *(ptr+i) != ' ' && *(ptr+i) != '\0' )
+    {
+      if( *(ptr+i) == 'A' )
+      {
+        if( (option_flag & OPT_FLAG_SA) > 0 )
+        {//error pattern
+          error_log(cl, " ERROR: echo mode: can't use options -a -A at once.\n");
+          return -1;
+        }
+        option_flag |= OPT_FLAG_LA;
+      }
+      else if( *(ptr+i) == 'a' )
+      {
+        if( (option_flag & OPT_FLAG_LA) > 0 )
+        {//error pattern
+          error_log(cl, " ERROR: echo mode: can't use options -a -A at once.\n");
+          return -1;
+        }
+        option_flag |= OPT_FLAG_SA;
+      }
+      else if( *(ptr+i) == 'b' )
+      {
+        if( (option_flag & OPT_FLAG_SP) > 0 )
+        {//error pattern
+          error_log(cl, " ERROR: echo mode: can't use options -b -B at once.\n");
+          return -1;
+        }
+        option_flag |= OPT_FLAG_UB;
+      }
+      else if( *(ptr+i) == 'B' )
+      {
+        if( (option_flag & OPT_FLAG_UB) > 0 )
+        {//error pattern
+          error_log(cl, " ERROR: echo mode: can't use options -b -B at once.\n");
+          return -1;
+        }
+        option_flag |= OPT_FLAG_SP;
+      }
+
+      i++;
+    }// while( *(ptr+i) )
+    ptr += i; //
+  }// if( *ptr == '-' )
+
+  while( *ptr == ' ' ){ ptr++; }// slide pointer until reach option or string or end of buffer
+
+  log_echo(ptr, option_flag, cl);
+
+  return 0;
+}
+
+bool isMangle( char *recv_buf )
+{
+  return (strncmp(recv_buf, CMD4, strlen(CMD4)) == 0);
+}
+
+//keywords
+#define PRIM_V "void"
+#define PRIM_I "int"
+#define PRIM_C "char"
+#define PRIM_L "long"
+#define PRIM_S "short"
+#define PRIM_F "float"
+#define PRIM_D "double"
+#define MODI_U "unsigned"
+#define MODI_P "*"
+
+unsigned long isPrimitive( char *ptr )
+{
+  if( strncmp(ptr, PRIM_V, strlen(PRIM_V)) == 0 ){ return strlen(PRIM_V); }
+  if( strncmp(ptr, PRIM_I, strlen(PRIM_I)) == 0 ){ return strlen(PRIM_I); }
+  if( strncmp(ptr, PRIM_C, strlen(PRIM_C)) == 0 ){ return strlen(PRIM_C); }
+  if( strncmp(ptr, PRIM_L, strlen(PRIM_L)) == 0 ){ return strlen(PRIM_L); }
+  if( strncmp(ptr, PRIM_S, strlen(PRIM_S)) == 0 ){ return strlen(PRIM_S); }
+  if( strncmp(ptr, PRIM_F, strlen(PRIM_F)) == 0 ){ return strlen(PRIM_F); }
+  if( strncmp(ptr, PRIM_D, strlen(PRIM_D)) == 0 ){ return strlen(PRIM_D); }
+  return 0;
+}
+
+int parse_mangle_mode( char *recv_buf, char *cl )
+{
+  char *ptr = recv_buf;
+  char *function_name = (char *)malloc(sizeof(char) * 32);
+  char *function_args = (char *)malloc(sizeof(char) * 32);
+  unsigned int buf_size = 1024;
+  char *buf = (char *)malloc(sizeof(char) * buf_size);
+
+  while( *ptr != ' ' ){ ptr++; }// slide pointer until reach space (:mangle_<- here)
+  // *ptr == ' '
+  while( *ptr == ' ' ){ ptr++; }// slide pointer until reach option or string or end of buffer
+  // *ptr != ' '
+
+  // check return type (unsigned exist ?)
+  if( strncmp(ptr, MODI_U, strlen(MODI_U)) == 0 )
+  {
+    ptr += strlen(MODI_U);
+    while( *ptr == ' ' ){ ptr++; }
+  }
+
+  // check return type
+  unsigned long prim_len;
+  if( ( prim_len = isPrimitive(ptr) ) > 0 )
+  {
+    ptr += prim_len;
+  }
+  else
+  {
+    while
+    (
+      ('0' <= *ptr && *ptr <= '9') ||
+      ('a' <= *ptr && *ptr <= 'z') ||
+      ('A' <= *ptr && *ptr <= 'Z') ||
+      *ptr == '_'
+    )
+    {
+      ptr++;
+    }
+  }
+  if( *ptr != ' ' && *ptr != '*')
+  {//error
+    error_log(cl, "ERROR! mangle mode: use disable charactor for return type name.\n");
+    return -1;
+  }
+
+  // check return type (pointer exist ?)
+  while( *ptr == ' ' ){ ptr++; }
+  while( *ptr == '*' ){ ptr++; }
+  while( *ptr == ' ' ){ ptr++; }
+
+  // check function name
+  // enable charactor for function name, '0'-'9', 'a'-'z', 'A'-'Z', '_'
+  unsigned int function_name_length = 0;
+  while
+  (
+    ('0' <= *ptr && *ptr <= '9') ||
+    ('a' <= *ptr && *ptr <= 'z') ||
+    ('A' <= *ptr && *ptr <= 'Z') ||
+    *ptr == '_'
+  )
+  {
+    function_name[function_name_length] = *ptr;
+    function_name_length++;
+    ptr++;
+  }
+  function_name[function_name_length] = '\0';
+  if( *ptr != ' ' && *ptr != '(' )
+  {//error
+    error_log(cl, "ERROR! mangle mode: use disable charactor for function name.\n");
+    return -1;
+  }
+  while( *ptr == ' ' ){ ptr++; }
+
+  // checking args
+  if( *ptr == '(' )
+  {// check args (some args ...)
+    ptr++;
+    unsigned int index = 0;
+    while( *ptr != ')' && *ptr != '\0' )
+    {
+      while( *ptr == ' ' ){ ptr++; }
+      if( (prim_len = isPrimitive(ptr)) > 0 )
+      {
+        if( strncmp(ptr, PRIM_V, strlen(PRIM_V)) == 0 ){ function_args[index++] = 'v'; }
+        else if( strncmp(ptr, PRIM_I, strlen(PRIM_I)) == 0 ){ function_args[index++] = 'i'; }
+        else if( strncmp(ptr, PRIM_C, strlen(PRIM_C)) == 0 ){ function_args[index++] = 'c'; }
+        else if( strncmp(ptr, PRIM_L, strlen(PRIM_L)) == 0 ){ function_args[index++] = 'l'; }
+        else if( strncmp(ptr, PRIM_S, strlen(PRIM_S)) == 0 ){ function_args[index++] = 's'; }
+        else if( strncmp(ptr, PRIM_F, strlen(PRIM_F)) == 0 ){ function_args[index++] = 'f'; }
+        else if( strncmp(ptr, PRIM_D, strlen(PRIM_D)) == 0 ){ function_args[index++] = 'd'; }
+        ptr += prim_len;
+      }
+      while( *ptr == ' ' ){ ptr++; }
+
+      if( *ptr != ',' && *ptr != ')' )
+      {//error
+        fprintf(stderr, "disable function args: %c\n", *ptr);
+        error_log(cl, "ERROR! mangle mode: use disable charactor in function args.\n");
+        return -1;
+      }
+      if( *ptr == ',' ){ ptr++; }
+    }
+    function_args[index] = '\0';
+  }
+  else
+  {//error
+    error_log(cl, "ERROR! mangle mode: use disable charactor after function name.\n");
+    return -1;
+  }
+
+  // finally
+  snprintf(buf, buf_size, "_Z%u%sE%s\n", function_name_length, function_name, function_args);
+  log_write("", cl, buf);
+
+  free(function_name);
+  free(function_args);
+  free(buf);
+
+  return 0;
+}
+
+bool isDemangle( char *recv_buf )
+{
+  return (strncmp(recv_buf, CMD5, strlen(CMD5)) == 0);
+}
+
+int parse_demangle_mode( char *recv_buf, char *cl )
+{
+
+  return 0;
+}
+
+int user_no = 1;
+#define BUF_SIZE 1024
 int interact_client(s_info *info)
 {
   int ws, w_size, r_size, recv_size, send_size;
 
   struct sockaddr_in ca;
   socklen_t ca_len;
-  char message[1024];
-  char recv_buf[1024];
-  char send_buf[1024];
+  char message[BUF_SIZE];
+  char recv_buf[BUF_SIZE];
+  char send_buf[BUF_SIZE];
 
   std::cerr << "Waiting for a connection ... " << std::endl;
   ca_len = sizeof(ca);
@@ -198,26 +526,29 @@ int interact_client(s_info *info)
       while( ftell(fp_log_read) < ftell(fp_log) )
       {//log load
         //char buf_log[1024];
-        fgets(send_buf, 1024, fp_log_read);//read point
+        fgets(send_buf, BUF_SIZE, fp_log_read);//read point
         char *p = &send_buf[0];
-        std::cout << trim(&p) << std::endl;//leak!
+        p = trim(&p);
+        //std::cout << trim(&p) << std::endl;//leak!
+        std::cout << p << std::endl;
+        free(p);
 
         if( (send_size = send(ws, send_buf, strlen(send_buf), 0)) == -1 )
         { perror("send"); exit(1); }
 
-        recv(ws, recv_buf, sizeof(recv_buf), 0);//sync 1
+        recv(ws, recv_buf, sizeof(recv_buf), 0);//sync 1, not user msg but auto msg
         //sleep(1);
       }
       /*-----------------------------------------------*/
-      std::cout << SYNC1 << " user No." << user_no << std::endl;
+      //std::cout << SYNC1 << " user No." << user_no << std::endl;
       if( (send_size = send(ws, SYNC1, strlen(SYNC1), 0)) == -1 )
       { perror("send"); exit(1); }//sync 0
 
       ++comment_counter;
       memset(recv_buf, 0, sizeof(recv_buf));//init buf
       if( (recv_size = recv(ws, recv_buf, sizeof(recv_buf), 0 )) == -1 )
-      { perror("recv"); exit(1); }//sync 1
-      //buffering msg in recv_buf
+      { perror("recv"); exit(1); }//sync 1, user msg: iip start/end
+      // buffering msg in recv_buf
       // this is symbolize point
 
       /*--------------------------------------------------------------*/
@@ -226,59 +557,80 @@ int interact_client(s_info *info)
       /* → ここである程度までループしないと、後半のstrncmpはすべてUNSATになる */
       /*--------------------------------------------------------------*/
       char *ptr_c = recv_buf;
-      unsigned int char_sum = 0;
+      unsigned int char_len = 0;
       while( *ptr_c != '\0' )
       {
-        char_sum += *ptr_c;
+        char_len++;
         ptr_c++;
       }
-      printf("char_sum: %u\n", char_sum);
+      //printf("char_len: %u\n", char_len);
 
       /*--------------------------------------------------------------*/
       /* want to break limit point: (comment_counter > 0) always true */
       /*--------------------------------------------------------------*/
       if(comment_counter > 0)
       {//print msg to server and logging
-        if( strncmp(recv_buf, "\n", 1) == 0)
-        {
-          // log will not seeked
-          fseek(fp_log, 0L, SEEK_END);
-        }
-        else if( strncmp(recv_buf, SYNC3, strlen(SYNC3)) == 0 )
-        {//timeout (automatic sent MSG from client program)
-          // log will not seeked
-          fseek(fp_log, 0L, SEEK_END);
-        }
-        else
+
+        /*--------------------------------------------------------------*/
+        /* check to be going to log */
+        if( isLoging(recv_buf) )
         {
           fprintf(stderr, "Cleint %d> %s", user_no, recv_buf);
           log_write("", cl, recv_buf);//leak!
         }
+        else
+        {
+          // log will not seeked
+          // pattern is "\n" or SYNC3 := "timeout."
+          fseek(fp_log, 0L, SEEK_END);
+        }
         /*--------------------------------------------------------------*/
         /* pattern match for input (recv_buf)                           */
         /*--------------------------------------------------------------*/
-        if( strncmp(recv_buf, MSG1, strlen(MSG1)) == 0 )
-        { //escape -> want to skip path exploration
-          fprintf(stderr, "disconnect from client %d ...\n", user_no);
+        if( isCommand(recv_buf) )
+        {// command pattern check
+          if( isQuit(recv_buf) )
+          { // :q escape -> want to skip path exploration
+            fprintf(stderr, "disconnect from client %d ...\n", user_no);
 
-          memset(cl, 0, malloc_size_3);
-          snprintf(
-            cl, malloc_size_3,
-            "[Client %d disjoined.]\n", user_no);
-            log_write("", "", cl);//leak!
+            memset(cl, 0, malloc_size_3);
+            snprintf(cl, malloc_size_3, "[Client %d disjoined.]\n", user_no);
+            log_write("", "", cl);//leak! -> not leak(12/18)
 
-          free(cl);
-          break;
-        }
-        else if( strncmp(recv_buf, MSG2, strlen(MSG2) ) == 0 )
-        {
-          fprintf(stderr, "LEAK OCCUR! by user %d.\n", user_no);
-          malloc(1024*1024);
-        }
+            free(cl);
+            break;
+          }
+          else if( isLeak(recv_buf) )
+          {
+            fprintf(stderr, "LEAK OCCUR! by user %d.\n", user_no);
+            leak();
+            log_write("", cl, "LEAK OCCUR ... (((^o^)))");
+          }
+          else if( isEcho(recv_buf) )
+          {
+            fprintf(stderr, "echo mode: by user %d.\n", user_no);
+            parse_option_echo_mode(recv_buf, cl);
+          }
+          else if( isMangle(recv_buf) )
+          {
+            fprintf(stderr, "mangle mode: by user %d.\n", user_no);
+            parse_mangle_mode(recv_buf, cl);
+          }
+          else if( isDemangle(recv_buf) )
+          {
+            fprintf(stderr, "demangle mode: by user %d.\n", user_no);
+            parse_demangle_mode(recv_buf, cl);
+          }
+          else
+          {
+            fprintf(stderr, "unexpected mode: by user %d.\n", user_no);
+          }
 
-      }
+        }// if( isCommand() )
+        /*--------------------------------------------------------------*/
+      }// if( comment_counter > 0 )
 
-    }
+    }// while(1): input loop
     /*--------------------------------------------------------------*/
     std::cerr << ftell(fp_log) << " " << ftell(fp_log_read) << std::endl;
     close(ws);
