@@ -43,6 +43,8 @@ typedef struct server_info
 FILE *fp_log = NULL;
 FILE *fp_log_read = NULL;
 
+volatile void metabo_check_point(){ return; }
+
 char *trim(char **c)
 {//leaky
   if(c == NULL){
@@ -228,6 +230,7 @@ int log_echo( char *ptr, unsigned char option_flag, char *cl )
     if( buf_size <= index )
     {
       error_log(cl, "ERROR: mode echo: buffer over.\n");
+      metabo_check_point();
       return -1;
     }
     /*--------------------------------------------------------------*/
@@ -243,6 +246,7 @@ int log_echo( char *ptr, unsigned char option_flag, char *cl )
     if( buf_size <= index )
     {
       error_log(cl, "ERROR: mode echo: buffer over.\n");
+      metabo_check_point();
       return -1;//leak!
     }
 
@@ -250,7 +254,7 @@ int log_echo( char *ptr, unsigned char option_flag, char *cl )
   }
 
   log_write("", cl, buf);
-  free(buf);
+  free(buf);//if not reach here, leak occur
   return 0;
 }
 
@@ -303,6 +307,11 @@ int parse_option_echo_mode( char *recv_buf, char *cl )
           return -1;
         }
         option_flag |= OPT_FLAG_SP;
+      }
+      else
+      {// unexpected pattern
+        error_log(cl, " ERROR: echo mode: can use options -[a|A][b|B] only.\n");
+        return -1;
       }
 
       i++;
@@ -387,6 +396,7 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   if( *ptr != ' ' && *ptr != '*')
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor for return type name.\n");
+    metabo_check_point();
     return -1;
   }
 
@@ -414,6 +424,7 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   if( *ptr != ' ' && *ptr != '(' )
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor for function name.\n");
+    metabo_check_point();
     return -1;
   }
   while( *ptr == ' ' ){ ptr++; }
@@ -443,6 +454,7 @@ int parse_mangle_mode( char *recv_buf, char *cl )
       {//error
         fprintf(stderr, "disable function args: %c\n", *ptr);
         error_log(cl, "ERROR! mangle mode: use disable charactor in function args.\n");
+        metabo_check_point();
         return -1;
       }
       if( *ptr == ',' ){ ptr++; }
@@ -452,6 +464,7 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   else
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor after function name.\n");
+    metabo_check_point();
     return -1;
   }
 
@@ -459,6 +472,7 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   snprintf(buf, buf_size, "_Z%u%sE%s\n", function_name_length, function_name, function_args);
   log_write("", cl, buf);
 
+  // if not reach here, leak occur
   free(function_name);
   free(function_args);
   free(buf);
@@ -604,6 +618,7 @@ int interact_client(s_info *info)
           {
             fprintf(stderr, "LEAK OCCUR! by user %d.\n", user_no);
             leak();
+            metabo_check_point();
             log_write("", cl, "LEAK OCCUR ... (((^o^)))");
           }
           else if( isEcho(recv_buf) )

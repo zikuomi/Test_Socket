@@ -34,22 +34,22 @@ typedef struct client_info
 
 int client_socket_init(c_info *info)
 {
-  
+
   if( (info->sd = socket(AF_INET, SOCK_STREAM, 0)) == -1 )
     { perror("socket"); exit(1); }
-  
+
   memset(&(info->sv_addr), 0, sizeof(info->sv_addr));
   info->sv_addr.sin_family = AF_INET;
   info->sv_addr.sin_port = htons(SERVER_PORT);
   info->sv_addr.sin_addr.s_addr = inet_addr(SERVER_ADDR);
-  
+
   std::cerr << "Connecting to the server ..." << std::endl;
-  if( connect(info->sd, 
-	      (struct sockaddr *)&(info->sv_addr), 
+  if( connect(info->sd,
+	      (struct sockaddr *)&(info->sv_addr),
 	      sizeof(info->sv_addr)) == -1 )
     { perror("connect"); exit(1); }
   std::cerr << "Connected." << std::endl;
-  
+
   return 0;
 }
 
@@ -71,7 +71,7 @@ int interact_server(c_info *info)
   char buf_recv[BUF_SIZE];
   char buf_send[BUF_SIZE];
   char buf_input[BUF_SIZE];
-  
+
   //connected server(info->sd)
 #define SYNC1 "send done."
 #define SYNC2 "come next."
@@ -86,16 +86,16 @@ int interact_server(c_info *info)
 
 	  std::cerr << buf_recv;
 	  memset(buf_recv, 0, BUF_SIZE);
-	 
+
 	  //sleep(1);
 	}
-      
+
       //memcpy(buf_input, stdin, BUF_SIZE );
       std::cerr << "msg: " << buf_input;
       if(can_recv(STDIN_FILENO))
 	{
 	  fgets(buf_send, BUF_SIZE, stdin);
-       
+
 	  if( (send_size = send(info->sd, buf_send, strlen(buf_send), 0)) == -1 )
 	    { perror("send"); exit(1); }//sync1
 	  memset(buf_input, 0, BUF_SIZE);
