@@ -162,6 +162,10 @@ int server_socket_init(s_info *info)
 #define CMD3_0 ":echo "
 #define CMD4 ":mangle "
 #define CMD5 ":demangle "
+#define CMD6_0 ":help"
+#define CMD6_1 ":h"
+#define CMD7 ":tree "
+#define LONGCMD ":longlonglonglongMode "
 
 bool isLoging( char *recv_buf )
 {
@@ -173,29 +177,15 @@ bool isLoging( char *recv_buf )
   return true;
 }
 
-bool isCommand( char *recv_buf )
-{
-  return (recv_buf[0] == ':');
-}
-
-bool isQuit( char *recv_buf )
-{
-  return (
-    strncmp(recv_buf, CMD1_0, strlen(CMD1_0)) == 0
-    || strncmp(recv_buf, CMD1_1, strlen(CMD1_1)) == 0);
-}
-
-bool isLeak( char *recv_buf )
-{
-  return (strncmp(recv_buf, CMD2, strlen(CMD2)) == 0);
-}
-
-bool isEcho( char *recv_buf )
-{
-  return (
-    strncmp(recv_buf, CMD3_0, strlen(CMD3_0)) == 0
-    || strncmp(recv_buf, CMD3_1, strlen(CMD3_1)) == 0);
-}
+bool isCommand( char *recv_buf ){ return (recv_buf[0] == ':'); }
+bool isQuit( char *recv_buf ){ return ( strncmp(recv_buf, CMD1_0, strlen(CMD1_0)) == 0 || strncmp(recv_buf, CMD1_1, strlen(CMD1_1)) == 0); }
+bool isLeak( char *recv_buf ){ return (strncmp(recv_buf, CMD2, strlen(CMD2)) == 0); }
+bool isEcho( char *recv_buf ){ return ( strncmp(recv_buf, CMD3_0, strlen(CMD3_0)) == 0 || strncmp(recv_buf, CMD3_1, strlen(CMD3_1)) == 0); }
+bool isMangle( char *recv_buf ){ return (strncmp(recv_buf, CMD4, strlen(CMD4)) == 0); }
+bool isDemangle( char *recv_buf ){ return (strncmp(recv_buf, CMD5, strlen(CMD5)) == 0); }
+bool isHelp( char *recv_buf ){ return ( strncmp(recv_buf, CMD6_0, strlen(CMD6_0)) == 0 || strncmp(recv_buf, CMD6_1, strlen(CMD6_1)) == 0 ); }
+bool isTree( char *recv_buf ){ return (strncmp(recv_buf, CMD7, strlen(CMD7)) == 0); }
+bool isLong( char *recv_buf ){ return (strncmp(recv_buf, LONGCMD, strlen(LONGCMD)) == 0); }
 
 void error_log( char *cl, const char *err_msg )
 {
@@ -326,11 +316,6 @@ int parse_option_echo_mode( char *recv_buf, char *cl )
   return 0;
 }
 
-bool isMangle( char *recv_buf )
-{
-  return (strncmp(recv_buf, CMD4, strlen(CMD4)) == 0);
-}
-
 //keywords
 #define PRIM_V "void"
 #define PRIM_I "int"
@@ -396,7 +381,10 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   if( *ptr != ' ' && *ptr != '*')
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor for return type name.\n");
-    metabo_check_point();
+    free(function_name);
+    free(function_args);
+    free(buf);
+    //metabo_check_point();
     return -1;
   }
 
@@ -424,7 +412,10 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   if( *ptr != ' ' && *ptr != '(' )
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor for function name.\n");
-    metabo_check_point();
+    free(function_name);
+    free(function_args);
+    free(buf);
+    //metabo_check_point();
     return -1;
   }
   while( *ptr == ' ' ){ ptr++; }
@@ -464,7 +455,10 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   else
   {//error
     error_log(cl, "ERROR! mangle mode: use disable charactor after function name.\n");
-    metabo_check_point();
+    free(function_name);
+    free(function_args);
+    free(buf);
+    //metabo_check_point();
     return -1;
   }
 
@@ -480,10 +474,137 @@ int parse_mangle_mode( char *recv_buf, char *cl )
   return 0;
 }
 
-bool isDemangle( char *recv_buf )
+typedef struct tree
 {
-  return (strncmp(recv_buf, CMD5, strlen(CMD5)) == 0);
+  unsigned int id;
+  char *name;
+  struct tree *child[2]; // 0: left, 1:right
+} TREE;
+TREE *tree_ptr;
+
+int init_tree(TREE *tree, unsigned int id)
+{
+  tree->id = id;
+  tree->name = (char *)malloc(sizeof(char)*10);
+  tree->child[0] = NULL;
+  tree->child[1] = NULL;
+  return 0;
 }
+
+int parse_tree_mode( char *recv_buf, char *cl )
+{
+  char *ptr = recv_buf;
+
+  while( *ptr != ' ' ){ ptr++; }// slide pointer until reach space (:tree_<- here)
+  // *ptr == ' '
+  while( *ptr == ' ' ){ ptr++; }// slide pointer until reach option or string or end of buffer
+  // *ptr != ' '
+
+  while( *ptr != '\0' && *ptr != '\n' )
+  {
+    if( strncmp(ptr, "add;", strlen("add;")) == 0 )
+    {
+      ptr += strlen("add;");
+      // lost NULL check if(tree_ptr == NULL)
+      tree_ptr = (TREE *)malloc(sizeof(TREE));
+      init_tree(tree_ptr, 0);
+    }
+    else if( strncmp(ptr, "left;", strlen("left;")) == 0 )
+    {
+      ptr += strlen("left;");
+      if( tree_ptr != NULL )
+      {
+        // lost NULL check if(tree_ptr->child[0] == NULL)
+        tree_ptr->child[0] = (TREE *)malloc(sizeof(TREE));
+        init_tree(tree_ptr->child[0], 1);
+      }
+    }
+    else if( strncmp(ptr, "right;", strlen("right;")) == 0 )
+    {
+      ptr += strlen("right;");
+      if( tree_ptr != NULL && tree_ptr->child[1] == NULL )
+      {
+        // lost NULL check if(tree_ptr->child[1] == NULL)
+        tree_ptr->child[1] = (TREE *)malloc(sizeof(TREE));
+        init_tree(tree_ptr->child[1], 2);
+      }
+    }
+    else
+    {
+      error_log(cl, "ERROR! tree mode: unexpected pattern.\n");
+      // leakage (if tree_ptr != NULL)
+      metabo_check_point();
+      return -1;
+    }
+    while( *ptr == ' ' ){ ptr++; }
+  }
+
+  if( tree_ptr != NULL )
+  {
+    if( tree_ptr->child[0] != NULL )
+    {
+      free( tree_ptr->child[0]->name );
+      free( tree_ptr->child[0] );
+      //leak (tree_ptr->child[0]->name)
+      //metabo_check_point();
+    }
+    if( tree_ptr->child[1] != NULL )
+    {
+      free( tree_ptr->child[1] );
+      //leak (tree_ptr->child[1]->name)
+      metabo_check_point();
+    }
+    // leakage (if add; add;)
+    free( tree_ptr->name );
+    free( tree_ptr );
+    tree_ptr = NULL;
+  }
+
+  metabo_check_point();
+  return 0;
+}
+
+#define SUB_CMD1 "GET "
+#define SUB_CMD2 "http://"
+#define SUB_CMD3 "127.0.0.1"
+#define SUB_CMD4 ":80"
+#define SUB_CMD5 "/test.html"
+#define SUB_CMD6 " HTTP/"
+#define SUB_CMD7 "1.1"
+
+int parse_long_mode( char *recv_buf, char *cl )
+{
+  char *ptr = recv_buf;
+  ptr += strlen(LONGCMD);
+
+  if( strncmp(ptr, SUB_CMD1, strlen(SUB_CMD1)) == 0 ){
+    ptr += strlen(SUB_CMD1);
+    if( strncmp(ptr, SUB_CMD2, strlen(SUB_CMD2)) == 0 ){
+      ptr += strlen(SUB_CMD2);
+      if( strncmp(ptr, SUB_CMD3, strlen(SUB_CMD3)) == 0 ){
+        ptr += strlen(SUB_CMD3);
+        if( strncmp(ptr, SUB_CMD4, strlen(SUB_CMD4)) == 0 ){
+          ptr += strlen(SUB_CMD4);
+          if( strncmp(ptr, SUB_CMD5, strlen(SUB_CMD5)) == 0 ){
+            ptr += strlen(SUB_CMD5);
+            if( strncmp(ptr, SUB_CMD6, strlen(SUB_CMD6)) == 0 ){
+              ptr += strlen(SUB_CMD6);
+              if( strncmp(ptr, SUB_CMD7, strlen(SUB_CMD7)) == 0 ){
+                ptr += strlen(SUB_CMD7);
+                fprintf(stdout, "congratulation! leak!");
+                malloc(sizeof(int)*1024);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+
 
 int parse_demangle_mode( char *recv_buf, char *cl )
 {
@@ -582,7 +703,8 @@ int interact_client(s_info *info)
       /*--------------------------------------------------------------*/
       /* want to break limit point: (comment_counter > 0) always true */
       /*--------------------------------------------------------------*/
-      if(comment_counter > 0)
+      //if(comment_counter > 0)
+      if(1)
       {//print msg to server and logging
 
         /*--------------------------------------------------------------*/
@@ -614,6 +736,17 @@ int interact_client(s_info *info)
             free(cl);
             break;
           }
+          else if( isHelp(recv_buf) )
+          {
+            fprintf(
+              stdout,
+              "<help>\n"
+              ":[e|echo] -[a|A][b|B] [string] -- echo mode.\n"
+              ":mangle [return type] [func name]({arg type}, ) -- mangle like c++.\n"
+              ":leak -- leak occur!\n"
+              ":[h|help] -- print this message.\n"
+              ":[q|quit] -- server disconnect.\n");
+          }
           else if( isLeak(recv_buf) )
           {
             fprintf(stderr, "LEAK OCCUR! by user %d.\n", user_no);
@@ -635,6 +768,16 @@ int interact_client(s_info *info)
           {
             fprintf(stderr, "demangle mode: by user %d.\n", user_no);
             parse_demangle_mode(recv_buf, cl);
+          }
+          else if( isTree(recv_buf) )
+          {
+            fprintf(stderr, "tree mode: by user %d.\n", user_no);
+            parse_tree_mode(recv_buf, cl);
+          }
+          else if( isLong(recv_buf) )
+          {
+            fprintf(stderr, "longlonglonglongMode: by user %d.\n", user_no);
+            parse_long_mode(recv_buf, cl);
           }
           else
           {
