@@ -166,8 +166,9 @@ int server_socket_init(s_info *info)
 #define CMD6_1 ":h"
 #define CMD7 ":tree "
 #define LONGCMD ":longlonglonglongMode "
+#define CMD8 ":noalloc "
 
-bool isLoging( char *recv_buf )
+inline bool isLoging( char *recv_buf )
 {
   if( strncmp(recv_buf, "\n", strlen("\n")) == 0 ){ return false; }
   //no user msg
@@ -177,15 +178,16 @@ bool isLoging( char *recv_buf )
   return true;
 }
 
-bool isCommand( char *recv_buf ){ return (recv_buf[0] == ':'); }
-bool isQuit( char *recv_buf ){ return ( strncmp(recv_buf, CMD1_0, strlen(CMD1_0)) == 0 || strncmp(recv_buf, CMD1_1, strlen(CMD1_1)) == 0); }
-bool isLeak( char *recv_buf ){ return (strncmp(recv_buf, CMD2, strlen(CMD2)) == 0); }
-bool isEcho( char *recv_buf ){ return ( strncmp(recv_buf, CMD3_0, strlen(CMD3_0)) == 0 || strncmp(recv_buf, CMD3_1, strlen(CMD3_1)) == 0); }
-bool isMangle( char *recv_buf ){ return (strncmp(recv_buf, CMD4, strlen(CMD4)) == 0); }
-bool isDemangle( char *recv_buf ){ return (strncmp(recv_buf, CMD5, strlen(CMD5)) == 0); }
-bool isHelp( char *recv_buf ){ return ( strncmp(recv_buf, CMD6_0, strlen(CMD6_0)) == 0 || strncmp(recv_buf, CMD6_1, strlen(CMD6_1)) == 0 ); }
-bool isTree( char *recv_buf ){ return (strncmp(recv_buf, CMD7, strlen(CMD7)) == 0); }
-bool isLong( char *recv_buf ){ return (strncmp(recv_buf, LONGCMD, strlen(LONGCMD)) == 0); }
+inline bool isCommand( char *recv_buf ){ return (recv_buf[0] == ':'); }
+inline bool isQuit( char *recv_buf ){ return ( strncmp(recv_buf, CMD1_0, strlen(CMD1_0)) == 0 || strncmp(recv_buf, CMD1_1, strlen(CMD1_1)) == 0); }
+inline bool isLeak( char *recv_buf ){ return (strncmp(recv_buf, CMD2, strlen(CMD2)) == 0); }
+inline bool isEcho( char *recv_buf ){ return ( strncmp(recv_buf, CMD3_0, strlen(CMD3_0)) == 0 || strncmp(recv_buf, CMD3_1, strlen(CMD3_1)) == 0); }
+inline bool isMangle( char *recv_buf ){ return (strncmp(recv_buf, CMD4, strlen(CMD4)) == 0); }
+inline bool isDemangle( char *recv_buf ){ return (strncmp(recv_buf, CMD5, strlen(CMD5)) == 0); }
+inline bool isHelp( char *recv_buf ){ return ( strncmp(recv_buf, CMD6_0, strlen(CMD6_0)) == 0 || strncmp(recv_buf, CMD6_1, strlen(CMD6_1)) == 0 ); }
+inline bool isTree( char *recv_buf ){ return (strncmp(recv_buf, CMD7, strlen(CMD7)) == 0); }
+inline bool isLong( char *recv_buf ){ return (strncmp(recv_buf, LONGCMD, strlen(LONGCMD)) == 0); }
+inline bool isNoAlloc( char *recv_buf ){ return (strncmp(recv_buf, CMD8, strlen(CMD8)) == 0); }
 
 void error_log( char *cl, const char *err_msg )
 {
@@ -327,7 +329,7 @@ int parse_option_echo_mode( char *recv_buf, char *cl )
 #define MODI_U "unsigned"
 #define MODI_P "*"
 
-unsigned long isPrimitive( char *ptr )
+inline unsigned long isPrimitive( char *ptr )
 {
   if( strncmp(ptr, PRIM_V, strlen(PRIM_V)) == 0 ){ return strlen(PRIM_V); }
   if( strncmp(ptr, PRIM_I, strlen(PRIM_I)) == 0 ){ return strlen(PRIM_I); }
@@ -533,8 +535,7 @@ int parse_tree_mode( char *recv_buf, char *cl )
     {
       error_log(cl, "ERROR! tree mode: unexpected pattern.\n");
       // leakage (if tree_ptr != NULL)
-      metabo_check_point();
-      return -1;
+      break;
     }
     while( *ptr == ' ' ){ ptr++; }
   }
@@ -592,7 +593,8 @@ int parse_long_mode( char *recv_buf, char *cl )
               if( strncmp(ptr, SUB_CMD7, strlen(SUB_CMD7)) == 0 ){
                 ptr += strlen(SUB_CMD7);
                 fprintf(stdout, "congratulation! leak!");
-                malloc(sizeof(int)*1024);
+                leak();
+                metabo_check_point();
               }
             }
           }
@@ -604,7 +606,22 @@ int parse_long_mode( char *recv_buf, char *cl )
   return 0;
 }
 
+int parse_no_alloc_mode( char *recv_buf, char *cl )
+{
+  char *ptr = recv_buf;
+  while( *ptr != '\0' )
+  {
+    while( *ptr == '*' ){ ptr++; }
+    while( *ptr == '_' ){ ptr++; }
+    while( *ptr == ' ' ){ ptr++; }
+    while( *ptr == '#' ){ ptr++; }
+    while( *ptr == '^' ){ ptr++; }
+    if( *ptr == '\0' ){ break; }
+    else{ ptr++; }
+  }
 
+  return 0;
+}
 
 int parse_demangle_mode( char *recv_buf, char *cl )
 {
@@ -778,6 +795,11 @@ int interact_client(s_info *info)
           {
             fprintf(stderr, "longlonglonglongMode: by user %d.\n", user_no);
             parse_long_mode(recv_buf, cl);
+          }
+          else if( isNoAlloc(recv_buf) )
+          {
+            fprintf(stderr, "no alloc mode: by user %d.\n", user_no);
+            parse_no_alloc_mode(recv_buf, cl);
           }
           else
           {
